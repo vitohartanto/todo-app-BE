@@ -4,6 +4,7 @@ const cors = require('cors');
 const pool = require('./db');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const { v4: uuidv4 } = require('uuid');
 
 // Middleware
 // app.use(
@@ -59,38 +60,57 @@ app.post('/todos', verifyToken, async (req, res) => {
   }
 });
 
-// Get all todos
-app.get('/todos', async (req, res) => {
+// Get all todos for a user
+app.get('/todos', verifyToken, async (req, res) => {
   try {
-    const allTodos = await pool.query('SELECT * FROM todo');
-    res.json(allTodos.rows);
+    const userId = req.user.id;
+    const userTodos = await pool.query(
+      `SELECT t.* FROM todo t
+      JOIN user_tasks ut ON t.todo_id = ut.todo_id
+      WHERE ut.user_id = $1`,
+      [userId]
+    );
+    res.json(userTodos.rows);
   } catch (error) {
     console.error(error.message);
   }
 });
 
-// Get a todo
-app.get('/todos/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const todo = await pool.query('SELECT * FROM todo WHERE todo_id = $1', [
-      id,
-    ]);
+// // Get a todo
+// app.get('/todos/:id', async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const todo = await pool.query('SELECT * FROM todo WHERE todo_id = $1', [
+//       id,
+//     ]);
 
-    res.json(todo.rows[0]);
-  } catch (error) {
-    console.error(error.message);
-  }
-});
+//     res.json(todo.rows[0]);
+//   } catch (error) {
+//     console.error(error.message);
+//   }
+// });
 
 // Update a todo
-app.put('/todos/:id', async (req, res) => {
+app.put('/todos/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { description, completed } = req.body;
+    const userId = req.user.id;
 
+    // Check if the todo belongs to the logged-in user
+    const userTodo = await pool.query(
+      `SELECT t.* FROM todo t
+      JOIN user_tasks ut ON t.todo_id = ut.todo_id
+      WHERE t.todo_id = $1 AND ut.user_id = $2`,
+      [id, userId]
+    );
+
+    if (userTodo.rows.length === 0) {
+      return res.status(403).json({ msg: 'Not authorized' });
+    }
+
+    // Update the todo
     if (description) {
-      // Update description jika disediakan dalam body
       await pool.query('UPDATE todo SET description = $1 WHERE todo_id = $2', [
         description,
         id,
@@ -115,10 +135,22 @@ app.put('/todos/:id', async (req, res) => {
 app.delete('/todos/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const deletedTodo = await pool.query(
-      'DELETE FROM todo WHERE todo_id = $1 RETURNING *',
-      [id]
+    const userId = req.user.id;
+
+    // Check if the todo belongs to the logged-in user
+    const userTodo = await pool.query(
+      `SELECT t.* FROM todo t
+      JOIN user_tasks ut ON t.todo_id = ut.todo_id
+      WHERE t.todo_id = $1 AND ut.user_id = $2`,
+      [id, userId]
     );
+
+    if (userTodo.rows.length === 0) {
+      return res.status(403).json({ msg: 'Not authorized' });
+    }
+
+    // Delete the todo
+    await pool.query('DELETE FROM todo WHERE todo_id = $1', [id]);
 
     res.json('Todo was deleted!');
   } catch (error) {
@@ -150,6 +182,7 @@ app.put('/todos/reorder', async (req, res) => {
 app.post('/register', async (req, res) => {
   try {
     const { username, password } = req.body;
+    const id = `user-${uuidv4()}`;
 
     // Check if user exists
     const userExist = await pool.query(
@@ -166,24 +199,18 @@ app.post('/register', async (req, res) => {
 
     // Save user to database
     const newUser = await pool.query(
-      'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING *',
-      [username, hashedPassword]
+      'INSERT INTO users (user_id, username, password) VALUES ($1, $2, $3) RETURNING user_id',
+      [id, username, hashedPassword]
     );
 
-    // Generate JWT
-    const payload = { user: { id: newUser.rows[0].user_id } };
-    const token = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: '1h',
-    });
-
-    res.json({ token });
+    res.json(newUser.rows[0]);
   } catch (error) {
     console.error(error.message);
   }
 });
 
-// Login user
-app.post('/login', async (req, res) => {
+// Endpoint untuk Menambahkan Autentikasi alias Log In
+app.post('/authentications', async (req, res) => {
   try {
     const { username, password } = req.body;
 
@@ -192,7 +219,9 @@ app.post('/login', async (req, res) => {
       username,
     ]);
     if (user.rows.length === 0) {
-      return res.status(400).json({ msg: 'Invalid credentials' });
+      return res
+        .status(400)
+        .json({ msg: 'Invalid credentials! No username found' });
     }
 
     // Check password
@@ -203,11 +232,75 @@ app.post('/login', async (req, res) => {
 
     // Generate JWT
     const payload = { user: { id: user.rows[0].user_id } };
-    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+    const accessToken = jwt.sign(payload, process.env.JWT_ACCESS_SECRET, {
       expiresIn: '1h',
     });
+    const refreshToken = jwt.sign(payload, process.env.JWT_REFRESH_SECRET, {
+      expiresIn: '7d',
+    });
 
-    res.json({ token });
+    // Simpan refresh token ke database
+    await pool.query('UPDATE users SET refresh_token = $1 WHERE user_id = $2', [
+      refreshToken,
+      user.rows[0].user_id,
+    ]);
+
+    res.json({ accessToken, refreshToken });
+  } catch (error) {
+    console.error(error.message);
+  }
+});
+
+// Endpoint untuk memperbarui accessToken menggunakan refreshToken
+app.put('/authentications', async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res
+        .status(401)
+        .json({ msg: 'No refresh token, authorization denied' });
+    }
+
+    const user = await pool.query(
+      'SELECT * FROM users WHERE refresh_token = $1',
+      [refreshToken]
+    );
+
+    if (user.rows.length === 0) {
+      return res
+        .status(403)
+        .json({ msg: 'Invalid refresh token or Expired over 7 days' });
+    }
+
+    jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET, (err, decoded) => {
+      if (err) {
+        return res.status(403).json({ msg: 'Invalid refresh token' });
+      }
+
+      const payload = { user: { id: decoded.user.id } };
+      const accessToken = jwt.sign(payload, process.env.JWT_ACCESS_SECRET, {
+        expiresIn: '1h',
+      });
+
+      res.json({ accessToken });
+    });
+  } catch (error) {
+    console.error(error.message);
+  }
+});
+
+// Endpoint logout untuk menghapus refreshToken dari database
+app.delete('/authentications', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    await pool.query(
+      'UPDATE users SET refresh_token = NULL WHERE user_id = $1',
+      [userId]
+    );
+
+    res.json({ msg: 'Logged out successfully' });
   } catch (error) {
     console.error(error.message);
   }
