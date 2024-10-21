@@ -2,6 +2,8 @@ const express = require('express');
 const app = express();
 const cors = require('cors');
 const pool = require('./db');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 
 // Middleware
 // app.use(
@@ -16,15 +18,39 @@ app.use(cors());
 
 app.use(express.json()); // to access req.body
 
+// Middleware untuk verifikasi token JWT
+const verifyToken = (req, res, next) => {
+  const token = req.header('x-auth-token');
+  if (!token) {
+    return res.status(401).json({ msg: 'No token, authorization denied' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded.user;
+    next();
+  } catch (err) {
+    res.status(401).json({ msg: 'Token is not valid' });
+  }
+};
+
 // ROUTES
 
 // Create a Todo
-app.post('/todos', async (req, res) => {
+app.post('/todos', verifyToken, async (req, res) => {
   try {
     const { description } = req.body;
+    const userId = req.user.id;
+
     const newTodo = await pool.query(
       'INSERT INTO todo (description) VALUES($1) RETURNING *',
       [description]
+    );
+
+    // Associate todo with user
+    await pool.query(
+      'INSERT INTO user_tasks (user_id, todo_id) VALUES($1, $2)',
+      [userId, newTodo.rows[0].todo_id]
     );
 
     res.json(newTodo.rows[0]);
@@ -113,6 +139,75 @@ app.put('/todos/reorder', async (req, res) => {
 
     await Promise.all(updatePromises);
     res.json({ message: 'Order updated successfully' });
+  } catch (error) {
+    console.error(error.message);
+  }
+});
+
+// ROUTE UNTUK REGISTER DAN LOGIN
+
+// Register user
+app.post('/register', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // Check if user exists
+    const userExist = await pool.query(
+      'SELECT * FROM users WHERE username = $1',
+      [username]
+    );
+    if (userExist.rows.length > 0) {
+      return res.status(400).json({ msg: 'User already exists' });
+    }
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Save user to database
+    const newUser = await pool.query(
+      'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING *',
+      [username, hashedPassword]
+    );
+
+    // Generate JWT
+    const payload = { user: { id: newUser.rows[0].user_id } };
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: '1h',
+    });
+
+    res.json({ token });
+  } catch (error) {
+    console.error(error.message);
+  }
+});
+
+// Login user
+app.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // Find user by username
+    const user = await pool.query('SELECT * FROM users WHERE username = $1', [
+      username,
+    ]);
+    if (user.rows.length === 0) {
+      return res.status(400).json({ msg: 'Invalid credentials' });
+    }
+
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.rows[0].password);
+    if (!isMatch) {
+      return res.status(400).json({ msg: 'Invalid credentials' });
+    }
+
+    // Generate JWT
+    const payload = { user: { id: user.rows[0].user_id } };
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: '1h',
+    });
+
+    res.json({ token });
   } catch (error) {
     console.error(error.message);
   }
