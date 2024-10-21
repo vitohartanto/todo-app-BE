@@ -4,13 +4,15 @@ const cors = require('cors');
 const pool = require('./db');
 
 // Middleware
-app.use(
-  cors({
-    origin: 'https://todo-app-fe-rust.vercel.app',
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    credentials: true, // Jika kamu menggunakan cookie untuk autentikasi
-  })
-);
+// app.use(
+//   cors({
+//     origin: 'https://todo-app-fe-rust.vercel.app',
+//     methods: ['GET', 'POST', 'PUT', 'DELETE'],
+//     credentials: true, // Jika kamu menggunakan cookie untuk autentikasi
+//   })
+// );
+
+app.use(cors());
 
 app.use(express.json()); // to access req.body
 
