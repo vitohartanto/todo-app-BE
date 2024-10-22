@@ -7,15 +7,15 @@ const bcrypt = require('bcrypt');
 const { v4: uuidv4 } = require('uuid');
 
 // Middleware
-// app.use(
-//   cors({
-//     origin: 'https://todo-app-fe-rust.vercel.app',
-//     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-//     credentials: true, // Jika kamu menggunakan cookie untuk autentikasi
-//   })
-// );
+app.use(
+  cors({
+    origin: 'https://todo-app-fe-rust.vercel.app',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true, // Jika kamu menggunakan cookie untuk autentikasi
+  })
+);
 
-app.use(cors());
+// app.use(cors());
 
 app.use(express.json()); // to access req.body
 

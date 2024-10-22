@@ -3,8 +3,7 @@ CREATE DATABASE todo_app;
 CREATE TABLE todo(
     todo_id VARCHAR(100) PRIMARY KEY,
     description VARCHAR(255),
-    completed BOOLEAN DEFAULT FALSE,
-    
+    completed BOOLEAN DEFAULT FALSE    
 );
 
 CREATE TABLE users(
