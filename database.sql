@@ -4,7 +4,7 @@ CREATE TABLE todo(
     todo_id VARCHAR(100) PRIMARY KEY,
     description VARCHAR(255),
     completed BOOLEAN DEFAULT FALSE,
-    order_position INTEGER
+    
 );
 
 CREATE TABLE users(
